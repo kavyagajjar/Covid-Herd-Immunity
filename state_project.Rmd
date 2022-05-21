@@ -1,0 +1,139 @@
+---
+title: "State_project"
+author: "Kavya Gajjar"
+date: "18/04/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(RColorBrewer)
+require(maps)
+require(viridis)
+library(knitr)
+library(forecast)
+library(gridExtra)
+
+library(imputeTS)
+library(forecast)
+library(MLmetrics)
+library(lubridate)
+```
+
+```{r , warning=F, message=F}
+folder <- "D:\\MS DS\\DS 5110\\project\\Final project\\data\\"
+state_data<- read_csv(paste(folder,"us_state_vaccinations.csv",sep=""))
+globe_data <- read_csv(paste(folder,"country_vaccinations.csv",sep=""))
+pop_data <- read_csv(paste(folder, "statewise_population.csv", sep="")) %>%
+  select(State, Pop)
+# source: https://worldpopulationreview.com/states
+
+
+data <- state_data %>%
+  filter(location != 'United States') %>%
+  select(c('date','location','people_fully_vaccinated'))
+
+data$date <- strptime(data$date, "%Y-%m-%d" )
+data$date <- as.POSIXct(data$date)
+data$people_fully_vaccinated <- as.numeric(data$people_fully_vaccinated)
+colnames(pop_data)<- c("location", "population")
+
+data <- inner_join(data, pop_data,by = c("location"))
+data$population <- as.numeric(data$population)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+states <- unique(data$location)
+
+output <- as.data.frame(states)
+output$herd_immunity <- ''
+for (name in states){
+  #filter by state
+  df <- data %>%
+    filter(location == name)
+  
+  df$people_fully_vaccinated <- na.interpolation(df$people_fully_vaccinated,
+                          option = "stine")
+  training <- window(df$people_fully_vaccinated)
+  arima_optimal = auto.arima(training)
+    # arima(training, order = c(1,2,3))
+    # auto.arima(training)
+  # print(arima_optimal)
+  my_fc <- forecast(arima_optimal, h = 400)
+  pop <- df$population[1]
+  herd <- pop * 0.9
+  num = 0
+  for(i in 1:length(my_fc$mean)){
+    if (my_fc$mean[i] >= herd){
+      num = i
+      break
+    }
+  }
+  
+    
+  date <- as.Date(max(df$date))
+  final <- date + num
+  final = format(final, "%d,%B, %Y")
+  # print(paste("Herd Immunity for ",name," can be achieved by ",
+  #       final, sep=""))
+  output$herd_immunity[output$states == name] <- final
+  
+  # qqnorm(arima_optimal$residuals, col = 'blue')
+  # qqline(arima_optimal$residuals, col = 'red')
+}
+
+output
+```
+
+```{r}
+output$herd_immunity <- as.Date(output$herd_immunity, format = "%d,%B, %Y")
+output$monthYear <- format(output$herd_immunity , "%Y-%m")
+output$quaterYear <- paste(format(output$herd_immunity,"%Y"),
+                                  quarters(output$herd_immunity), sep="-")
+
+output %>%
+  group_by(monthYear) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = monthYear, y = count))+
+  geom_bar(stat = 'identity', color="#FF0066", fill="#FF6666")+
+  geom_text(aes(label= paste(
+            round(count/ length(states)*100,2),
+            "%",
+            sep =""
+          )),
+        position=position_dodge(width=0.9), vjust=-0.25)+
+  geom_vline(xintercept = '2021-12',
+             linetype="dotted",
+             size = 1)+
+  labs(x = "Year-Month",
+       y = "Numebr of States",
+       title = "Distribution of states that will achieve Herd immunity on montly basis")
+ggsave("monthly.png")
+
+output %>%
+  group_by(quaterYear) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = quaterYear, y = count))+
+  geom_bar(stat = 'identity', color="#FF0066", fill="#FF6666")+
+  geom_text(aes(label= paste(
+            round(count/ length(states)*100,2),
+            "%",
+            sep =""
+          )),
+        position=position_dodge(width=0.9), vjust=-0.25)+
+  geom_vline(xintercept = '2021-Q4',
+            linetype="dotted",
+            size = 1)+
+  labs(x = "Year-Quater",
+       y = "Numebr of States",
+       title = "Distribution of states that will achieve Herd immunity on Quater basis")
+
+ggsave("quater.png")
+```
+
