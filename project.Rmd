@@ -1,0 +1,205 @@
+---
+title: "project"
+author: "Kavya Gajjar"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(RColorBrewer)
+require(maps)
+require(viridis)
+library(knitr)
+library(forecast)
+library(gridExtra)
+library(MLmetrics)
+```
+
+```{r , warning=F, message=F}
+folder <- "D:\\MS DS\\DS 5110\\project\\Final project\\data\\"
+df<- read_csv(paste(folder,"us_state_vaccinations.csv",sep=""))
+globe_data <- read_csv(paste(folder,"country_vaccinations.csv",sep=""))
+
+
+
+data <- globe_data %>%
+  filter(iso_code == 'USA') %>%
+  filter(date <= '2021-03-30') %>%
+  select(c('date','people_vaccinated'))
+
+colnames(data) <- c("date","people_vaccinated")
+
+library(imputeTS)
+data$people_vaccinated <- na.interpolation(data$people_vaccinated,
+                                           option = "linear")
+
+
+
+test_data <- globe_data %>%
+  filter(iso_code == 'USA') %>%
+  filter(date > '2021-03-30') %>%
+  select(c('date','people_vaccinated'))
+
+data$date <- strptime(data$date, "%Y-%m-%d" )
+data$date <- as.POSIXct(data$date)
+data$people_vaccinated <- as.numeric(data$people_vaccinated)
+
+myts<- ts(data$people_vaccinated, frequency = 1,
+          start = as.Date('2020-12-20'), end = as.Date('2021-03-30'))
+
+my_df_ts <- data.frame(vaccination = myts, as.numeric(time(myts)))
+names(my_df_ts) <- c("vaccination", "time")
+
+
+
+# Then we can create a model using tslm
+# We can model using trend, season and random
+mymodel <- tslm(vaccination ~ trend,my_df_ts)
+mymodel
+# And forecast using this same model
+# We are going to predict the next 10 years
+# We can see the ascending trend
+test_fc <- forecast(mymodel,h=12)
+test_fc
+
+test_data$pred <- test_fc$mean
+
+
+RMSE(test_data$people_vaccinated, test_data$pred)
+
+my_fc <- forecast(mymodel, h=200)
+my_fc
+plot(my_fc)
+
+pop <- 334537857
+herd <- pop * 0.9
+
+
+num = 0
+for(i in 1:length(my_fc$mean)){
+  if (my_fc$mean[i] >= herd){
+    num = i
+    break
+  }
+}
+
+
+date <- as.Date('2021-04-11') 
+final <- date + num
+final = format(final, "%d,%B, %Y")
+print(paste("Herd Immunity can be achieved by ",
+            final, sep=""))
+
+qqnorm(mymodel$residuals, col="red")
+qqline(mymodel$residuals, col = "blue")
+```
+
+
+
+```{r}
+library(forecast)
+library(MLmetrics)
+
+training <- window(data$people_vaccinated)
+
+
+
+#90- train 10- test
+# #rmse
+# acf(training, lag.max = 40)
+# pacf(training, lag.max = 200)
+
+arima_optimal = auto.arima(training, nmodel = 2000,seasonal = FALSE)
+
+test_fc <- forecast(arima_optimal,h=12)
+
+test_data$pred <- test_fc$mean
+test_data
+RMSE(test_data$people_vaccinated, test_data$pred)
+
+my_fc <- forecast(arima_optimal, h = 200)
+plot(my_fc)
+
+pop <- 334537857
+herd <- pop * 0.9
+
+
+for(i in 1:length(my_fc$mean)){
+  if (my_fc$mean[i] >= herd){
+    num = i
+    break
+  }
+}
+
+
+arima_optimal
+
+
+# imputation
+# seasonality and trend
+# model working
+# p,d, q , arima 
+# sarima
+# tslm doesn't work for us!
+date <- as.Date('2021-04-11') 
+final <- date + num
+final = format(final, "%d,%B, %Y")
+print(paste("Herd Immunity can be achieved by ",
+            final, sep=""))
+
+qqnorm(arima_optimal$residuals, col = 'blue')
+qqline(arima_optimal$residuals, col = 'red')
+```
+
+```{r}
+pop <- 334537857
+
+h <- c(0.3,0.5,0.7,0.9)
+
+timeline <- as.data.frame(h)
+timeline$date <- ''
+timeline$pop <- 0
+for (per in h){
+    herd <- pop * per
+    for(i in 1:length(my_fc$mean)){
+      if (my_fc$mean[i] >= herd){
+        num = i
+        val = my_fc$mean[i]
+        break
+      }
+    }
+    date <- as.Date('2021-04-11') 
+    final <- date + num
+    final = format(final, "%d,%B, %Y")
+    timeline$date[timeline$h == per] <- final
+    timeline$pop[timeline$h == per] <- val
+}
+colnames(timeline) <- c("Per_pop", "Herd_date","pop") 
+# timeline$date <- as.Date(timeline$Herd_date, format = "%d,%B, %Y")
+# timeline$days <- (timeline$date - as.Date('2021-01-01'))
+timeline$Per_pop <- timeline$Per_pop *100
+timeline$Per_pop <- as.character(timeline$Per_pop)
+timeline$Per_pop <- paste(timeline$Per_pop,"%", sep = "")
+timeline <- timeline[order(timeline$pop, decreasing = FALSE),]
+
+
+library(scales)
+ggplot(timeline, aes(y =pop, x = reorder(Per_pop, pop)))+
+  geom_col(col = "#FF6666", fill ="#FF6666", alpha = 0.5)+
+  coord_flip()+
+  geom_text(aes(label = paste(Per_pop,"-",Herd_date,sep ="")), vjust = 1, hjust = 1.25)+
+  scale_y_continuous(label= comma)+
+  labs( x = "Percentage of Population", 
+        title = "Predicted Progress of Vaccination")+
+  theme(axis.line.x = element_blank(),
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())
+
+ggsave("Progress.png")
+```
